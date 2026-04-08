@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="WebGP – client-side PGP encryption and decryption in your browser. No data leaves your device.">
+    <title>WebGP</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg">
+    <script src="openpgp.min.js"></script>
+    <style>
+      *, *::before, *::after { box-sizing: border-box; }
+
+      :root {
+        --bg:           #121212;
+        --surface:      #1e1e1e;
+        --text:         #e0e0e0;
+        --muted:        #888;
+        --accent:       #7c3aed;
+        --accent-hover: #6d28d9;
+        --border:       #333;
+      }
+
+      body.light {
+        --bg:           #f5f5f5;
+        --surface:      #ffffff;
+        --text:         #111111;
+        --muted:        #666666;
+        --accent:       #5b21b6;
+        --accent-hover: #4c1d95;
+        --border:       #cccccc;
+      }
+
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 0;
+        padding: 2rem 1rem;
+        background: var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+
+      header {
+        width: 100%;
+        max-width: 640px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 2rem;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 1.5rem;
+        letter-spacing: -0.02em;
+      }
+
+      main {
+        width: 100%;
+        max-width: 640px;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+
+      textarea,
+      input[type="password"] {
+        width: 100%;
+        padding: 0.6rem 0.8rem;
+        font-family: 'Courier New', monospace;
+        font-size: 0.9rem;
+        background: var(--surface);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        resize: vertical;
+        transition: border-color 0.15s;
+      }
+
+      textarea:focus,
+      input[type="password"]:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+
+      .mode-group {
+        display: flex;
+        gap: 1.5rem;
+      }
+
+      .mode-group label {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        cursor: pointer;
+      }
+
+      .actions {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+      }
+
+      button {
+        padding: 0.6em 1.2em;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 0.9rem;
+        font-weight: 500;
+        transition: background-color 0.15s, opacity 0.15s;
+      }
+
+      button.primary {
+        background: var(--accent);
+        color: #fff;
+      }
+
+      button.primary:hover { background: var(--accent-hover); }
+
+      button.primary:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      button.secondary {
+        background: transparent;
+        color: var(--text);
+        border: 1px solid var(--border);
+      }
+
+      button.secondary:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      .meta {
+        font-size: 0.8rem;
+        color: var(--muted);
+        margin: 0;
+      }
+
+      #toast {
+        position: fixed;
+        bottom: 1.5rem;
+        left: 50%;
+        transform: translateX(-50%) translateY(2rem);
+        background: var(--surface);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.6rem 1.2rem;
+        font-size: 0.875rem;
+        opacity: 0;
+        transition: opacity 0.2s, transform 0.2s;
+        pointer-events: none;
+        white-space: nowrap;
+        z-index: 100;
+      }
+
+      #toast.show {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+      }
+
+      @media (max-width: 480px) {
+        body { padding: 1.25rem 0.75rem; }
+        .actions { flex-direction: column; }
+        button { width: 100%; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>WebGP</h1>
+      <button class="secondary" onclick="toggleTheme()">Toggle Theme</button>
+    </header>
+
+    <main>
+      <textarea id="input" rows="8" placeholder="Paste plaintext or armored PGP message here"></textarea>
+
+      <div class="mode-group">
+        <label><input type="radio" name="mode" value="encrypt" checked> Encrypt</label>
+        <label><input type="radio" name="mode" value="decrypt"> Decrypt</label>
+      </div>
+
+      <input type="password" id="passphrase" placeholder="Passphrase">
+      <input type="password" id="passphrase-verify" placeholder="Verify passphrase (encryption only)">
+
+      <div class="actions">
+        <button class="primary" id="process-btn">Encrypt</button>
+        <button class="secondary" onclick="copyOutput()">Copy Output</button>
+      </div>
+
+      <textarea id="output" rows="10" placeholder="Output appears here" readonly></textarea>
+
+      <p class="meta">Key derivation time: <span id="s2k-time">–</span> ms</p>
+    </main>
+
+    <div id="toast"></div>
+
+    <script>
+      // AES-256 + SHA-512, iterated S2K (RFC 4880 §3.7.1.3) at maximum iteration count
+      openpgp.config.s2kCipherAlgo        = openpgp.enums.symmetric.aes256;
+      openpgp.config.s2kHashAlgo          = openpgp.enums.hash.sha512;
+      openpgp.config.s2kMode              = 3;
+      openpgp.config.s2kIterationCountByte = 255; // ~65 million iterations
+
+      const processBtn = document.getElementById('process-btn');
+      const input      = document.getElementById('input');
+      const output     = document.getElementById('output');
+
+      document.querySelectorAll('input[name="mode"]').forEach(r =>
+        r.addEventListener('change', () => {
+          processBtn.textContent = r.value === 'encrypt' ? 'Encrypt' : 'Decrypt';
+        })
+      );
+
+      function toggleTheme() {
+        document.body.classList.toggle('light');
+      }
+
+      let toastTimer;
+      function showToast(msg) {
+        const el = document.getElementById('toast');
+        el.textContent = msg;
+        el.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => el.classList.remove('show'), 2500);
+      }
+
+      async function copyOutput() {
+        if (!output.value) return;
+        try {
+          await navigator.clipboard.writeText(output.value);
+        } catch {
+          output.select();
+          document.execCommand('copy');
+        }
+        showToast('Copied to clipboard');
+      }
+
+      async function encryptText(plaintext, passphrase) {
+        const t0 = performance.now();
+        const result = await openpgp.encrypt({
+          message: await openpgp.createMessage({ text: plaintext }),
+          passwords: [passphrase],
+          format: 'armored'
+        });
+        document.getElementById('s2k-time').textContent = (performance.now() - t0).toFixed(0);
+        return result;
+      }
+
+      async function decryptText(armored, passphrase) {
+        const message = await openpgp.readMessage({ armoredMessage: armored });
+        const { data } = await openpgp.decrypt({ message, passwords: [passphrase], format: 'utf8' });
+        return data;
+      }
+
+      processBtn.addEventListener('click', async () => {
+        const mode       = document.querySelector('input[name="mode"]:checked').value;
+        const passphrase = document.getElementById('passphrase').value;
+        const verify     = document.getElementById('passphrase-verify').value;
+
+        if (!passphrase) { showToast('Please enter a passphrase'); return; }
+        if (mode === 'encrypt' && passphrase !== verify) { showToast('Passphrases do not match'); return; }
+        if (!input.value.trim()) { showToast('Nothing to process'); return; }
+
+        processBtn.disabled    = true;
+        processBtn.textContent = mode === 'encrypt' ? 'Encrypting…' : 'Decrypting…';
+        output.value           = '';
+
+        try {
+          output.value = mode === 'encrypt'
+            ? await encryptText(input.value, passphrase)
+            : await decryptText(input.value.trim(), passphrase);
+        } catch (err) {
+          output.value = 'Error: ' + (err.message || String(err));
+          showToast('Operation failed');
+        } finally {
+          processBtn.disabled    = false;
+          processBtn.textContent = mode === 'encrypt' ? 'Encrypt' : 'Decrypt';
+        }
+      });
+    </script>
+  </body>
+</html>
