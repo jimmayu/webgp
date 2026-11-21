@@ -7,6 +7,8 @@ A minimal, client-side PGP encryption and decryption tool that runs entirely in 
 ## Features
 
 - Symmetric PGP encryption and decryption using a passphrase
+- Public-key encryption and decryption (encrypt to a recipient's public key, decrypt with your private key)
+- In-browser key pair generation — Curve25519 (X25519 + Ed25519), NIST P-256, and RSA 2048/4096 — passphrase-protected by default
 - AES-256 cipher with SHA-512 key derivation (iterated S2K, ~65 million rounds)
 - Passphrase verification field to prevent encryption typos
 - Dark and light themes
@@ -24,7 +26,9 @@ A minimal, client-side PGP encryption and decryption tool that runs entirely in 
 ## Security notes
 
 - All cryptographic operations run locally in your browser via [OpenPGP.js](https://openpgpjs.org/)
-- The library uses symmetric encryption (password-based), not public-key cryptography
+- Supports both symmetric (password-based) and asymmetric (public-key) encryption; ECC runs in pure JavaScript, RSA uses the browser's native WebCrypto
+- Private keys are passphrase-protected by default and never stored — nothing is persisted to `localStorage`/`IndexedDB`
+- A Content-Security-Policy blocks all network requests and form submission as defense-in-depth against data leaks
 - The high iteration count makes brute-force attacks significantly more expensive
 - For sensitive use, serve the app over HTTPS to prevent script injection
 

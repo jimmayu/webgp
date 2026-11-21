@@ -6,6 +6,12 @@
     <meta name="description" content="WebGP – client-side PGP encryption and decryption in your browser. No data leaves your device.">
     <title>WebGP</title>
     <link rel="icon" type="image/svg+xml" href="./favicon.svg">
+    <!--
+      Defense-in-depth against data leaks. These directives do not touch
+      script/style/img loading, so they are safe on file:// as well as https://.
+      connect-src 'none' blocks all network exfiltration (fetch/XHR/WebSocket).
+    -->
+    <meta http-equiv="Content-Security-Policy" content="form-action 'none'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; connect-src 'none'">
     <script src="openpgp.min.js"></script>
     <style>
       *, *::before, *::after { box-sizing: border-box; }
@@ -65,8 +71,13 @@
         gap: 1rem;
       }
 
+      [hidden] { display: none !important; }
+
       textarea,
-      input[type="password"] {
+      input[type="password"],
+      input[type="text"],
+      input[type="email"],
+      select {
         width: 100%;
         padding: 0.6rem 0.8rem;
         font-family: 'Courier New', monospace;
@@ -79,8 +90,11 @@
         transition: border-color 0.15s;
       }
 
+      select { font-family: system-ui, sans-serif; resize: none; }
+
       textarea:focus,
-      input[type="password"]:focus {
+      input:focus,
+      select:focus {
         outline: none;
         border-color: var(--accent);
       }
@@ -88,6 +102,7 @@
       .mode-group {
         display: flex;
         gap: 1.5rem;
+        flex-wrap: wrap;
       }
 
       .mode-group label {
@@ -95,6 +110,18 @@
         align-items: center;
         gap: 0.4rem;
         cursor: pointer;
+      }
+
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3rem;
+      }
+
+      .field-label {
+        font-size: 0.8rem;
+        color: var(--muted);
+        margin: 0;
       }
 
       .actions {
@@ -142,6 +169,34 @@
         margin: 0;
       }
 
+      .note {
+        font-size: 0.75rem;
+        color: var(--muted);
+        margin: 0;
+      }
+
+      .note.warn { color: #d97706; }
+
+      details {
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0.8rem 1rem;
+        background: var(--surface);
+      }
+
+      details > summary {
+        cursor: pointer;
+        font-weight: 500;
+      }
+
+      details[open] > summary { margin-bottom: 0.8rem; }
+
+      .keygen-grid {
+        display: flex;
+        flex-direction: column;
+        gap: 0.8rem;
+      }
+
       #toast {
         position: fixed;
         bottom: 1.5rem;
@@ -186,8 +241,28 @@
         <label><input type="radio" name="mode" value="decrypt"> Decrypt</label>
       </div>
 
-      <input type="password" id="passphrase" placeholder="Passphrase">
-      <input type="password" id="passphrase-verify" placeholder="Verify passphrase (encryption only)">
+      <div class="mode-group">
+        <label><input type="radio" name="keytype" value="passphrase" checked> Passphrase</label>
+        <label><input type="radio" name="keytype" value="pubkey"> Public key</label>
+      </div>
+
+      <div id="sym-fields" class="field">
+        <input type="password" id="passphrase" placeholder="Passphrase" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <input type="password" id="passphrase-verify" placeholder="Verify passphrase (encryption only)" autocomplete="off" autocapitalize="off" spellcheck="false">
+      </div>
+
+      <div id="asym-fields" class="field" hidden>
+        <div id="recipient-wrap" class="field" hidden>
+          <p class="field-label">Recipient's armored public key</p>
+          <textarea id="recipient-key" rows="5" placeholder="-----BEGIN PGP PUBLIC KEY BLOCK-----&#10;..." autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+        </div>
+        <div id="private-wrap" class="field" hidden>
+          <p class="field-label">Your armored private key</p>
+          <textarea id="private-key" rows="5" placeholder="-----BEGIN PGP PRIVATE KEY BLOCK-----&#10;..." autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+          <p class="field-label">Private key passphrase <span class="note">(only if your key is protected)</span></p>
+          <input type="password" id="key-passphrase" placeholder="Key passphrase" autocomplete="off" autocapitalize="off" spellcheck="false">
+        </div>
+      </div>
 
       <div class="actions">
         <button class="primary" id="process-btn">Encrypt</button>
@@ -197,26 +272,116 @@
       <textarea id="output" rows="10" placeholder="Output appears here" readonly></textarea>
 
       <p class="meta">Key derivation time: <span id="s2k-time">–</span> ms</p>
+
+      <details id="keygen">
+        <summary>Generate a key pair (public key encryption)</summary>
+        <div class="keygen-grid">
+          <div class="field">
+            <p class="field-label">Name</p>
+            <input type="text" id="keygen-name" placeholder="Your name" autocomplete="off" autocapitalize="off" spellcheck="false">
+          </div>
+          <div class="field">
+            <p class="field-label">Email</p>
+            <input type="email" id="keygen-email" placeholder="you@example.com" autocomplete="off" autocapitalize="off" spellcheck="false">
+          </div>
+          <div class="field">
+            <p class="field-label">Algorithm</p>
+            <select id="keygen-algo">
+              <option value="curve25519">Curve25519 (X25519 + Ed25519) — recommended</option>
+              <option value="nistp256">NIST P-256 (ECDH + ECDSA)</option>
+              <option value="rsa4096">RSA 4096</option>
+              <option value="rsa2048">RSA 2048</option>
+            </select>
+            <p class="note" id="rsa-note" hidden>RSA keys use your browser's built-in crypto and require a secure context (file://, localhost, or https://).</p>
+          </div>
+          <div class="field">
+            <p class="field-label">Private key passphrase</p>
+            <input type="password" id="keygen-pass" placeholder="Passphrase (protects your private key)" autocomplete="off" autocapitalize="off" spellcheck="false">
+            <input type="password" id="keygen-pass-verify" placeholder="Verify passphrase" autocomplete="off" autocapitalize="off" spellcheck="false">
+          </div>
+          <div class="actions">
+            <button class="primary" id="keygen-btn">Generate key pair</button>
+          </div>
+          <div class="field">
+            <p class="field-label">Public key <span class="note">(share this — anyone can encrypt to you)</span></p>
+            <textarea id="keygen-public" rows="8" placeholder="Your public key appears here" readonly></textarea>
+            <div class="actions">
+              <button class="secondary" onclick="copyGeneratedPublic()">Copy Public Key</button>
+            </div>
+          </div>
+          <div class="field">
+            <p class="field-label">Private key <span class="note warn">(keep secret — never share; this app does not store it)</span></p>
+            <textarea id="keygen-private" rows="10" placeholder="Your private key appears here" readonly></textarea>
+            <div class="actions">
+              <button class="secondary" onclick="copyGeneratedPrivate()">Copy Private Key</button>
+            </div>
+          </div>
+        </div>
+      </details>
     </main>
 
     <div id="toast"></div>
 
     <script>
-      // AES-256 + SHA-512, iterated S2K (RFC 4880 §3.7.1.3) at maximum iteration count
-      openpgp.config.s2kCipherAlgo        = openpgp.enums.symmetric.aes256;
-      openpgp.config.s2kHashAlgo          = openpgp.enums.hash.sha512;
-      openpgp.config.s2kMode              = 3;
-      openpgp.config.s2kIterationCountByte = 255; // ~65 million iterations
+      // AES-256 + SHA-512, iterated S2K (RFC 4880 §5.5.3) at maximum iteration count.
+      // Applies to symmetric encryption and to passphrase-protecting newly generated
+      // private keys. Decryption always honors the iteration count embedded in the data.
+      openpgp.config.s2kCipherAlgo          = openpgp.enums.symmetric.aes256;
+      openpgp.config.s2kHashAlgo            = openpgp.enums.hash.sha512;
+      openpgp.config.s2kMode                = 3;
+      openpgp.config.s2kIterationCountByte  = 255; // ~65 million iterations
 
-      const processBtn = document.getElementById('process-btn');
-      const input      = document.getElementById('input');
-      const output     = document.getElementById('output');
+      // RSA in this bundle runs on the browser's native WebCrypto (crypto.subtle),
+      // which only exists in a secure context. Guard against its absence.
+      const subtleAvailable = typeof crypto !== 'undefined' && !!crypto.subtle;
+
+      const processBtn     = document.getElementById('process-btn');
+      const input          = document.getElementById('input');
+      const output         = document.getElementById('output');
+      const symFields      = document.getElementById('sym-fields');
+      const asymFields     = document.getElementById('asym-fields');
+      const recipientWrap  = document.getElementById('recipient-wrap');
+      const privateWrap    = document.getElementById('private-wrap');
+      const verifyField    = document.getElementById('passphrase-verify');
+      const s2kTime        = document.getElementById('s2k-time');
+
+      function getAction()   { return document.querySelector('input[name="mode"]:checked').value; }
+      function getKeyType()  { return document.querySelector('input[name="keytype"]:checked').value; }
+
+      function updateUI() {
+        const action   = getAction();
+        const keytype  = getKeyType();
+
+        symFields.hidden   = keytype !== 'passphrase';
+        asymFields.hidden  = keytype !== 'pubkey';
+
+        // Within public-key mode, show recipient key for encrypt, private key for decrypt.
+        recipientWrap.hidden = !(keytype === 'pubkey' && action === 'encrypt');
+        privateWrap.hidden   = !(keytype === 'pubkey' && action === 'decrypt');
+
+        // Verify field is only meaningful for passphrase encryption.
+        verifyField.hidden = !(keytype === 'passphrase' && action === 'encrypt');
+
+        processBtn.textContent = action === 'encrypt' ? 'Encrypt' : 'Decrypt';
+        if (keytype === 'pubkey') s2kTime.textContent = '–';
+      }
 
       document.querySelectorAll('input[name="mode"]').forEach(r =>
-        r.addEventListener('change', () => {
-          processBtn.textContent = r.value === 'encrypt' ? 'Encrypt' : 'Decrypt';
-        })
+        r.addEventListener('change', updateUI)
       );
+      document.querySelectorAll('input[name="keytype"]').forEach(r =>
+        r.addEventListener('change', updateUI)
+      );
+
+      // Disable RSA options when crypto.subtle is unavailable, and reveal the note.
+      (function initRsaGuard() {
+        const sel  = document.getElementById('keygen-algo');
+        const note = document.getElementById('rsa-note');
+        for (const opt of sel.options) {
+          if (opt.value.startsWith('rsa') && !subtleAvailable) opt.disabled = true;
+        }
+        note.hidden = subtleAvailable;
+      })();
 
       function toggleTheme() {
         document.body.classList.toggle('light');
@@ -231,59 +396,190 @@
         toastTimer = setTimeout(() => el.classList.remove('show'), 2500);
       }
 
-      async function copyOutput() {
-        if (!output.value) return;
+      async function copyText(el, label) {
+        if (!el || !el.value) return;
         try {
-          await navigator.clipboard.writeText(output.value);
+          await navigator.clipboard.writeText(el.value);
         } catch {
-          output.select();
+          el.select();
           document.execCommand('copy');
         }
-        showToast('Copied to clipboard');
+        showToast('Copied ' + label + ' to clipboard');
       }
 
-      async function encryptText(plaintext, passphrase) {
+      function copyOutput()          { copyText(output, 'output'); }
+      function copyGeneratedPublic() { copyText(document.getElementById('keygen-public'), 'public key'); }
+      function copyGeneratedPrivate() {
+        if (!document.getElementById('keygen-private').value) return;
+        if (!confirm('This is your SECRET private key. Anyone with it can decrypt your messages. Copy it?')) return;
+        copyText(document.getElementById('keygen-private'), 'private key');
+      }
+
+      // readKey/readPrivateKey return a single Key, or an array when the armored
+      // block contains multiple keys. Normalize to a single key.
+      function singleKey(k) {
+        return Array.isArray(k) ? k[0] : k;
+      }
+
+      // ---- Symmetric (passphrase) ----
+      async function encryptSymmetric(plaintext, passphrase) {
         const t0 = performance.now();
         const result = await openpgp.encrypt({
           message: await openpgp.createMessage({ text: plaintext }),
           passwords: [passphrase],
           format: 'armored'
         });
-        document.getElementById('s2k-time').textContent = (performance.now() - t0).toFixed(0);
+        s2kTime.textContent = (performance.now() - t0).toFixed(0);
         return result;
       }
 
-      async function decryptText(armored, passphrase) {
+      async function decryptSymmetric(armored, passphrase) {
         const message = await openpgp.readMessage({ armoredMessage: armored });
         const { data } = await openpgp.decrypt({ message, passwords: [passphrase], format: 'utf8' });
         return data;
       }
 
-      processBtn.addEventListener('click', async () => {
-        const mode       = document.querySelector('input[name="mode"]:checked').value;
-        const passphrase = document.getElementById('passphrase').value;
-        const verify     = document.getElementById('passphrase-verify').value;
+      // ---- Asymmetric (public key) ----
+      async function encryptAsymmetric(plaintext, publicKeyArmored) {
+        const publicKey = singleKey(await openpgp.readKey({ armoredKey: publicKeyArmored }));
+        const message = await openpgp.createMessage({ text: plaintext });
+        return await openpgp.encrypt({
+          message,
+          encryptionKeys: publicKey,
+          format: 'armored'
+        });
+      }
 
-        if (!passphrase) { showToast('Please enter a passphrase'); return; }
-        if (mode === 'encrypt' && passphrase !== verify) { showToast('Passphrases do not match'); return; }
+      async function decryptAsymmetric(armored, privateKeyArmored, keyPassphrase) {
+        let privateKey = singleKey(await openpgp.readPrivateKey({ armoredKey: privateKeyArmored }));
+        try {
+          if (!privateKey.isDecrypted()) {
+            // decryptKey returns the unlocked key (it does not mutate in place).
+            privateKey = await openpgp.decryptKey({ privateKey, passphrase: keyPassphrase });
+          }
+          const message = await openpgp.readMessage({ armoredMessage: armored });
+          const { data } = await openpgp.decrypt({
+            message,
+            decryptionKeys: privateKey,
+            format: 'utf8'
+          });
+          return data;
+        } finally {
+          // Zero out in-memory secret material where the library allows it.
+          if (typeof privateKey.clearPrivateParams === 'function') privateKey.clearPrivateParams();
+        }
+      }
+
+      // ---- Key generation ----
+      function algorithmOptions(value) {
+        switch (value) {
+          case 'rsa4096':  return { type: 'rsa', rsaBits: 4096 };
+          case 'rsa2048':  return { type: 'rsa', rsaBits: 2048 };
+          case 'nistp256': return { type: 'ecc', curve: 'nistP256' };
+          case 'curve25519':
+          default:         return { type: 'ecc', curve: 'curve25519Legacy' };
+        }
+      }
+
+      async function generateKeyPair(name, email, algoValue, passphrase) {
+        const options = Object.assign(
+          {
+            userIDs: [{ name: name.trim(), email: email.trim() }],
+            passphrase,
+            format: 'armored'
+          },
+          algorithmOptions(algoValue)
+        );
+        return await openpgp.generateKey(options);
+      }
+
+      // ---- Main action handler ----
+      processBtn.addEventListener('click', async () => {
+        const action  = getAction();
+        const keytype = getKeyType();
+
         if (!input.value.trim()) { showToast('Nothing to process'); return; }
 
         processBtn.disabled    = true;
-        processBtn.textContent = mode === 'encrypt' ? 'Encrypting…' : 'Decrypting…';
+        processBtn.textContent = action === 'encrypt' ? 'Encrypting…' : 'Decrypting…';
         output.value           = '';
 
         try {
-          output.value = mode === 'encrypt'
-            ? await encryptText(input.value, passphrase)
-            : await decryptText(input.value.trim(), passphrase);
+          if (keytype === 'passphrase') {
+            const passphrase = document.getElementById('passphrase').value;
+            if (!passphrase) { showToast('Please enter a passphrase'); return; }
+            if (action === 'encrypt') {
+              const verify = document.getElementById('passphrase-verify').value;
+              if (passphrase !== verify) { showToast('Passphrases do not match'); return; }
+              output.value = await encryptSymmetric(input.value, passphrase);
+            } else {
+              output.value = await decryptSymmetric(input.value.trim(), passphrase);
+            }
+          } else { // public key
+            if (action === 'encrypt') {
+              const pub = document.getElementById('recipient-key').value.trim();
+              if (!pub) { showToast('Paste a recipient public key'); return; }
+              output.value = await encryptAsymmetric(input.value, pub);
+            } else {
+              const priv = document.getElementById('private-key').value.trim();
+              if (!priv) { showToast('Paste your private key'); return; }
+              const keyPass = document.getElementById('key-passphrase').value;
+              // Read secret material into locals, then clear the DOM fields
+              // immediately so they are not left behind on success OR failure.
+              document.getElementById('private-key').value = '';
+              document.getElementById('key-passphrase').value = '';
+              output.value = await decryptAsymmetric(input.value.trim(), priv, keyPass);
+            }
+          }
         } catch (err) {
           output.value = 'Error: ' + (err.message || String(err));
           showToast('Operation failed');
         } finally {
           processBtn.disabled    = false;
-          processBtn.textContent = mode === 'encrypt' ? 'Encrypt' : 'Decrypt';
+          processBtn.textContent = action === 'encrypt' ? 'Encrypt' : 'Decrypt';
         }
       });
+
+      // ---- Key generation handler ----
+      document.getElementById('keygen-btn').addEventListener('click', async () => {
+        const name       = document.getElementById('keygen-name').value.trim();
+        const email      = document.getElementById('keygen-email').value.trim();
+        const algoValue  = document.getElementById('keygen-algo').value;
+        const pass       = document.getElementById('keygen-pass').value;
+        const verify     = document.getElementById('keygen-pass-verify').value;
+        const pubOut     = document.getElementById('keygen-public');
+        const privOut    = document.getElementById('keygen-private');
+        const btn        = document.getElementById('keygen-btn');
+
+        if (!name || !email) { showToast('Enter a name and email'); return; }
+        if (!pass)           { showToast('Enter a passphrase to protect your private key'); return; }
+        if (pass !== verify) { showToast('Passphrases do not match'); return; }
+        if (algoValue.startsWith('rsa') && !subtleAvailable) {
+          showToast('RSA requires a secure context (crypto.subtle unavailable)');
+          return;
+        }
+
+        btn.disabled  = true;
+        btn.textContent = 'Generating…';
+        pubOut.value  = '';
+        privOut.value = '';
+
+        try {
+          const { publicKey, privateKey } = await generateKeyPair(name, email, algoValue, pass);
+          pubOut.value  = publicKey;
+          privOut.value = privateKey;
+          showToast('Key pair generated');
+        } catch (err) {
+          showToast('Generation failed: ' + (err.message || String(err)));
+        } finally {
+          btn.disabled  = false;
+          btn.textContent = 'Generate key pair';
+          document.getElementById('keygen-pass').value = '';
+          document.getElementById('keygen-pass-verify').value = '';
+        }
+      });
+
+      updateUI();
     </script>
   </body>
 </html>
